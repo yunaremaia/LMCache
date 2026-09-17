@@ -38,6 +38,14 @@ DEFAULT_TIMEOUT = 20.0
 pytestmark = pytest.mark.cuda
 RequestTransport = Literal["zmq", "grpc"]
 REQUEST_TRANSPORTS: tuple[RequestTransport, ...] = ("zmq", "grpc")
+_cache_key_namespace = 0
+
+
+@pytest.fixture(autouse=True)
+def _isolate_cache_keys() -> None:
+    """Use distinct cache objects for each function-scoped test."""
+    global _cache_key_namespace
+    _cache_key_namespace += 1
 
 
 def _has_working_new_shared_cuda() -> bool:
@@ -138,7 +146,8 @@ def create_cache_key(index: int, model: str = "testmodel") -> IPCCacheServerKey:
     Create a cache key for testing.
     """
     global CHUNK_SIZE
-    token_ids = [index] * CHUNK_SIZE
+    namespaced_index = _cache_key_namespace * 100_000 + index
+    token_ids = [namespaced_index] * CHUNK_SIZE
     return IPCCacheServerKey.from_token_ids(
         model,
         1,
@@ -146,7 +155,7 @@ def create_cache_key(index: int, model: str = "testmodel") -> IPCCacheServerKey:
         token_ids,
         start=0,
         end=CHUNK_SIZE,
-        request_id=f"test_request_{index}",
+        request_id=f"test_request_{namespaced_index}",
     )
 
 
