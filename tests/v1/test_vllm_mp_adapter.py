@@ -301,8 +301,8 @@ def test_scheduler_reset_cache_sends_clear_to_every_server():
         futures[url].result.assert_called_once_with(timeout=5.0)
 
 
-def test_connector_reset_cache_refuses_active_request_trackers():
-    """The scheduler connector preserves live request trackers on reset failure."""
+def test_connector_reset_cache_forwards_with_active_request_trackers():
+    """A best-effort reset preserves trackers while clearing idle cache."""
     connector_mod = pytest.importorskip("lmcache.integration.vllm.lmcache_mp_connector")
     connector = connector_mod.LMCacheMPConnector.__new__(
         connector_mod.LMCacheMPConnector
@@ -310,11 +310,12 @@ def test_connector_reset_cache_refuses_active_request_trackers():
     tracker = MagicMock(name="request_tracker")
     connector._role = connector_mod.KVConnectorRole.SCHEDULER
     connector.scheduler_adapter = MagicMock(name="scheduler_adapter")
+    connector.scheduler_adapter.reset_cache.return_value = True
     connector.request_trackers = {"req-1": tracker}
 
-    assert connector.reset_cache() is False
+    assert connector.reset_cache() is True
 
-    connector.scheduler_adapter.reset_cache.assert_not_called()
+    connector.scheduler_adapter.reset_cache.assert_called_once_with()
     assert connector.request_trackers == {"req-1": tracker}
 
 

@@ -984,27 +984,17 @@ class LMCacheMPConnector(KVConnectorBase_V1, SupportsHMA):
     # ==============================
 
     def reset_cache(self) -> bool | None:
-        """Reset LMCache MP cache state from the scheduler role.
+        """Request a best-effort LMCache MP cache clear from the scheduler.
 
-        vLLM may call this while local prefix-cache reset is already known to
-        have failed because requests still hold blocks. Refuse the external
-        reset in that case so live request trackers remain usable on the next
-        scheduler step.
+        Active request trackers are preserved. Backing servers retain objects
+        protected by in-flight read or write locks.
 
         Returns:
-            True when the MP servers accept the best-effort clear, False when
-            active requests or server timeouts prevent issuing a safe clear,
-            and None for worker-role connectors.
+            True when every MP server answers the clear, False on a server
+            timeout, and None for worker-role connectors.
         """
         if self.role != KVConnectorRole.SCHEDULER:
             return None
-
-        if self.request_trackers:
-            logger.warning(
-                "Skipping LMCache MP reset while %d request tracker(s) are active.",
-                len(self.request_trackers),
-            )
-            return False
 
         return self.scheduler_adapter.reset_cache()
 
