@@ -182,16 +182,6 @@ def lookup_all(
     return total
 
 
-def free_lookup_locks(
-    client: RequestClient,
-    keys: list[IPCCacheServerKey],
-    timeout: float = DEFAULT_TIMEOUT,
-) -> None:
-    """Release read locks acquired by lookup_all(..., release_locks=False)."""
-    for key in keys:
-        client.free_lookup_locks(key.no_worker_id_version(), 1).result(timeout=timeout)
-
-
 #: Exported event objects kept alive for the session: CUDA event handles are
 #: only importable while the exporting event object is alive (the timeline
 #: backend has no such requirement, but this keeps the harness valid for
@@ -528,7 +518,6 @@ def test_store_retrieve_verify(
     retrieve_result = retrieve_keys(
         client, keys, registered_instance, retrieve_block_ids, event_handle
     )
-    free_lookup_locks(client, keys)
 
     assert len(retrieve_result) == num_keys
     assert all(retrieve_result), "All keys should be retrieved successfully"
@@ -587,7 +576,6 @@ def test_retrieve_partial_miss(
     retrieve_result = retrieve_keys(
         client, all_keys, registered_instance, retrieve_block_ids, event_handle
     )
-    free_lookup_locks(client, stored_keys)
 
     assert len(retrieve_result) == num_requested
     # First 30 keys exist, remaining 30 don't
@@ -606,7 +594,6 @@ def test_retrieve_partial_miss(
     retrieve_result_2 = retrieve_keys(
         client, stored_keys, registered_instance, retrieve_block_ids_2, event_handle
     )
-    free_lookup_locks(client, stored_keys)
     assert len(retrieve_result_2) == num_stored
     assert all(retrieve_result_2), "All stored keys should be retrieved successfully"
 
@@ -677,7 +664,6 @@ def test_multiple_retrieve_operations(
         )
         assert len(retrieve_result) == keys_per_batch
         assert all(retrieve_result), "All keys should be retrieved successfully"
-    free_lookup_locks(client, all_keys)
 
     # Verify correctness
     for layer in range(client_context.num_layers):
