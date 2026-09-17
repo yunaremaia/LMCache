@@ -255,11 +255,11 @@ def fake_adapter(monkeypatch):
     return adapter, req_client, future
 
 
-def test_scheduler_reset_cache_submits_clear_and_clears_lookup_state(monkeypatch):
-    """reset_cache sends CLEAR and drops local state only after success."""
+def test_scheduler_reset_cache_submits_clear_and_preserves_lookup_state(monkeypatch):
+    """reset_cache sends CLEAR without dropping scheduler lookup bookkeeping."""
     adapter, clients = _make_scheduler_adapter(monkeypatch)
     future = MagicMock(name="clear_future")
-    future.result.return_value = True
+    future.result.return_value = None
     clients["tcp://127.0.0.1:0"].clear.return_value = future
     adapter._pending_lookups.add("req-1")
     adapter._unacked_lookups["req-1"] = MagicMock()
@@ -272,12 +272,12 @@ def test_scheduler_reset_cache_submits_clear_and_clears_lookup_state(monkeypatch
 
     clients["tcp://127.0.0.1:0"].clear.assert_called_once_with()
     future.result.assert_called_once_with(timeout=5.0)
-    assert adapter._pending_lookups == set()
-    assert adapter._unacked_lookups == {}
-    assert adapter._lookup_status == {}
-    assert adapter._finished_lookup_results == {}
-    assert adapter._per_server_hits == {}
-    assert adapter._lookup_params == {}
+    assert adapter._pending_lookups == {"req-1"}
+    assert "req-1" in adapter._unacked_lookups
+    assert "req-1" in adapter._lookup_status
+    assert adapter._finished_lookup_results == {"req-1": 256}
+    assert adapter._per_server_hits == {"req-1": {"tcp://127.0.0.1:0": 1}}
+    assert adapter._lookup_params == {"req-1": ([1, 2, 3, 4], "", None)}
     assert adapter.is_healthy is True
 
 
@@ -296,23 +296,6 @@ def test_scheduler_reset_cache_marks_unhealthy_on_timeout(monkeypatch):
     assert adapter.is_healthy is False
 
 
-def test_scheduler_reset_cache_incomplete_when_server_preserves_locked_objects(
-    monkeypatch,
-):
-    """A server False reply means CLEAR was safe but incomplete."""
-    adapter, clients = _make_scheduler_adapter(monkeypatch)
-    future = MagicMock(name="clear_future")
-    future.result.return_value = False
-    clients["tcp://127.0.0.1:0"].clear.return_value = future
-    adapter._pending_lookups.add("req-1")
-
-    assert adapter.reset_cache() is False
-
-    clients["tcp://127.0.0.1:0"].clear.assert_called_once_with()
-    assert adapter._pending_lookups == {"req-1"}
-    assert adapter.is_healthy is True
-
-
 def test_scheduler_reset_cache_sends_clear_to_every_server(monkeypatch):
     """Multi-server reset must clear every backing LMCache server."""
     urls = ["tcp://127.0.0.1:5555", "tcp://127.0.0.1:5556"]
@@ -320,7 +303,7 @@ def test_scheduler_reset_cache_sends_clear_to_every_server(monkeypatch):
     futures = {}
     for url, client in clients.items():
         futures[url] = MagicMock(name=f"clear_future[{url}]")
-        futures[url].result.return_value = True
+        futures[url].result.return_value = None
         client.clear.return_value = futures[url]
 
     assert adapter.reset_cache() is True

@@ -992,9 +992,9 @@ class LMCacheMPConnector(KVConnectorBase_V1, SupportsHMA):
         scheduler step.
 
         Returns:
-            True when the MP servers clear successfully, False when active
-            requests or in-flight server objects prevent a complete reset, and
-            None for worker-role connectors.
+            True when the MP servers accept the best-effort clear, False when
+            active requests or server timeouts prevent issuing a safe clear,
+            and None for worker-role connectors.
         """
         if self.role != KVConnectorRole.SCHEDULER:
             return None

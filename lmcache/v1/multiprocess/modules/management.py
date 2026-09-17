@@ -160,18 +160,12 @@ class ManagementModule:
         return list(self._experimental_transfer)
 
     @request_handler(RequestType.CLEAR, HandlerType.BLOCKING)
-    def clear(self) -> bool:
-        """Clear idle stored KV cache data from the storage manager.
-
-        Returns:
-            True when the storage manager has no locked objects left after the
-            clear, False when in-flight transfers kept locked objects alive.
-        """
+    def clear(self) -> None:
+        """Clear all stored KV cache data from the storage manager."""
         with self._clear_lock:
             self._ctx.storage_manager.memcheck()
-            cleared = self._ctx.storage_manager.clear(force=False)
+            self._ctx.storage_manager.clear(force=False)
             self._ctx.storage_manager.memcheck()
-            return cleared
 
     @request_handler(RequestType.NOOP)
     def debug(self) -> str:

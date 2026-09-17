@@ -1010,15 +1010,14 @@ class LMCacheMPSchedulerAdapter:
         self._lookup_params.pop(request_id, None)
 
     def reset_cache(self) -> bool:
-        """Clear idle server-side cache state and local lookup bookkeeping.
+        """Ask every backing LMCache server to best-effort clear idle cache.
 
-        Sends CLEAR to every backing LMCache server. The server preserves
-        locked objects, so a False reply means in-flight work kept some cache
-        entries alive and callers should treat the reset as incomplete.
+        Sends CLEAR to every backing LMCache server and waits for the RPCs to
+        complete. Servers preserve locked in-flight objects, so this method
+        does not clear scheduler-side lookup bookkeeping.
 
         Returns:
-            True when every healthy server reports a complete clear, False on
-            timeout or when any server preserves locked objects.
+            True when every healthy server answers CLEAR, False on timeout.
         """
         if not self.is_healthy:
             return False
@@ -1027,7 +1026,7 @@ class LMCacheMPSchedulerAdapter:
         success = True
         for url, future in futures.items():
             try:
-                cleared = future.result(timeout=self._mq_timeout)
+                future.result(timeout=self._mq_timeout)
             except TimeoutError:
                 logger.warning(
                     "CLEAR to %s timed out after %ss. Marking server as unhealthy.",
@@ -1038,23 +1037,7 @@ class LMCacheMPSchedulerAdapter:
                 success = False
                 continue
 
-            if cleared is False:
-                logger.warning(
-                    "CLEAR on %s preserved locked cache objects; reset incomplete.",
-                    url,
-                )
-                success = False
-
-        if not success:
-            return False
-
-        self._pending_lookups.clear()
-        self._unacked_lookups.clear()
-        self._lookup_status.clear()
-        self._finished_lookup_results.clear()
-        self._per_server_hits.clear()
-        self._lookup_params.clear()
-        return True
+        return success
 
     def shutdown(self) -> None:
         """Shutdown the scheduler adapter and its resources."""

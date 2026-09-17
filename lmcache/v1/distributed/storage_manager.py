@@ -1097,7 +1097,7 @@ class StorageManager:
         ]
 
     # Management APIs
-    def clear(self, force: bool = False) -> bool:
+    def clear(self, force: bool = False):
         """
         Clear data in the storage manager.
 
@@ -1106,12 +1106,8 @@ class StorageManager:
                 This may corrupt in-flight store/prefetch operations.
                 If False (default), only clear unlocked objects, keeping
                 write-locked and read-locked objects intact.
-
-        Returns:
-            True when no locked objects remain after the clear, False when
-            locked objects were preserved.
         """
-        return self._l1_manager.clear(force=force)
+        self._l1_manager.clear(force=force)
 
     def close(self):
         """
