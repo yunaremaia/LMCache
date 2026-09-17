@@ -127,42 +127,29 @@ def _make_worker_adapter(
 
 
 def _make_scheduler_adapter(
-    monkeypatch: pytest.MonkeyPatch,
-    server_urls: list[str] | None = None,
-) -> tuple[LMCacheMPSchedulerAdapter, dict[str, MagicMock]]:
-    """Construct a scheduler adapter with request clients stubbed."""
-    urls = server_urls or ["tcp://127.0.0.1:0"]
-    clients: dict[str, MagicMock] = {}
-
-    def fake_create(url: str, context: object) -> MagicMock:
-        client = MagicMock(name=f"req_client[{url}]", spec=RequestClient)
-        clients[url] = client
-        return client
-
-    factory = MagicMock(name="request_client_factory")
-    factory.create.side_effect = fake_create
-    monkeypatch.setattr(adapter_mod, "RequestClientFactory", factory)
-    monkeypatch.setattr(adapter_mod, "get_lmcache_chunk_size", lambda *a, **kw: 256)
-    monkeypatch.setattr(adapter_mod, "HeartbeatThread", FakeHeartbeatThread)
-
-    parallel_strategy = ParallelStrategy(
-        mla_only=False,
-        vllm_world_size=len(urls),
-        vllm_worker_id=0,
-        tp_size=len(urls),
-        pp_size=1,
-        n_servers=len(urls),
-    )
-    adapter = LMCacheMPSchedulerAdapter(
-        server_urls=urls,
-        context=MagicMock(name="zmq_context"),
-        model_name="test-model",
-        vllm_block_size=16,
-        parallel_strategy=parallel_strategy,
-        mq_timeout=5.0,
-    )
-    for client in clients.values():
-        client.reset_mock()
+    server_ids: list[str] | None = None,
+) -> tuple[LMCacheMPSchedulerAdapter, dict[str, RequestClient]]:
+    """Build reset state around transport-neutral request client mocks."""
+    servers = server_ids or ["server-a"]
+    clients: dict[str, RequestClient] = {
+        server: MagicMock(name=f"req_client[{server}]", spec=RequestClient)
+        for server in servers
+    }
+    adapter = LMCacheMPSchedulerAdapter.__new__(LMCacheMPSchedulerAdapter)
+    adapter._server_urls = servers
+    adapter.req_clients = clients
+    adapter._mq_timeout = 5.0
+    adapter._health_events = {}
+    for server in servers:
+        health_event = threading.Event()
+        health_event.set()
+        adapter._health_events[server] = health_event
+    adapter._pending_lookups = set()
+    adapter._unacked_lookups = {}
+    adapter._lookup_status = {}
+    adapter._finished_lookup_results = {}
+    adapter._per_server_hits = {}
+    adapter._lookup_params = {}
     return adapter, clients
 
 
@@ -255,51 +242,52 @@ def fake_adapter(monkeypatch):
     return adapter, req_client, future
 
 
-def test_scheduler_reset_cache_submits_clear_and_preserves_lookup_state(monkeypatch):
+def test_scheduler_reset_cache_submits_clear_and_preserves_lookup_state():
     """reset_cache sends CLEAR without dropping scheduler lookup bookkeeping."""
-    adapter, clients = _make_scheduler_adapter(monkeypatch)
+    adapter, clients = _make_scheduler_adapter()
+    server = adapter._server_urls[0]
     future = MagicMock(name="clear_future")
     future.result.return_value = None
-    clients["tcp://127.0.0.1:0"].clear.return_value = future
+    clients[server].clear.return_value = future
     adapter._pending_lookups.add("req-1")
     adapter._unacked_lookups["req-1"] = MagicMock()
-    adapter._lookup_status["req-1"] = {"tcp://127.0.0.1:0": (MagicMock(), 0.0)}
+    adapter._lookup_status["req-1"] = {server: (MagicMock(), 0.0)}
     adapter._finished_lookup_results["req-1"] = 256
-    adapter._per_server_hits["req-1"] = {"tcp://127.0.0.1:0": 1}
+    adapter._per_server_hits["req-1"] = {server: 1}
     adapter._lookup_params["req-1"] = ([1, 2, 3, 4], "", None)
 
     assert adapter.reset_cache() is True
 
-    clients["tcp://127.0.0.1:0"].clear.assert_called_once_with()
+    clients[server].clear.assert_called_once_with()
     future.result.assert_called_once_with(timeout=5.0)
     assert adapter._pending_lookups == {"req-1"}
     assert "req-1" in adapter._unacked_lookups
     assert "req-1" in adapter._lookup_status
     assert adapter._finished_lookup_results == {"req-1": 256}
-    assert adapter._per_server_hits == {"req-1": {"tcp://127.0.0.1:0": 1}}
+    assert adapter._per_server_hits == {"req-1": {server: 1}}
     assert adapter._lookup_params == {"req-1": ([1, 2, 3, 4], "", None)}
     assert adapter.is_healthy is True
 
 
-def test_scheduler_reset_cache_marks_unhealthy_on_timeout(monkeypatch):
+def test_scheduler_reset_cache_marks_unhealthy_on_timeout():
     """reset_cache returns False and preserves lookup state on CLEAR timeout."""
-    adapter, clients = _make_scheduler_adapter(monkeypatch)
+    adapter, clients = _make_scheduler_adapter()
+    server = adapter._server_urls[0]
     future = MagicMock(name="clear_future")
     future.result.side_effect = TimeoutError("server down")
-    clients["tcp://127.0.0.1:0"].clear.return_value = future
+    clients[server].clear.return_value = future
     adapter._pending_lookups.add("req-1")
 
     assert adapter.reset_cache() is False
 
-    clients["tcp://127.0.0.1:0"].clear.assert_called_once_with()
+    clients[server].clear.assert_called_once_with()
     assert adapter._pending_lookups == {"req-1"}
     assert adapter.is_healthy is False
 
 
-def test_scheduler_reset_cache_sends_clear_to_every_server(monkeypatch):
+def test_scheduler_reset_cache_sends_clear_to_every_server():
     """Multi-server reset must clear every backing LMCache server."""
-    urls = ["tcp://127.0.0.1:5555", "tcp://127.0.0.1:5556"]
-    adapter, clients = _make_scheduler_adapter(monkeypatch, urls)
+    adapter, clients = _make_scheduler_adapter(["server-a", "server-b"])
     futures = {}
     for url, client in clients.items():
         futures[url] = MagicMock(name=f"clear_future[{url}]")
